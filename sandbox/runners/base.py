@@ -29,7 +29,7 @@ from sandbox.configs.run_config import RunConfig
 from sandbox.runners.isolation import tmp_cgroup, tmp_netns, tmp_overlayfs
 from sandbox.runners.types import CodeRunArgs, CodeRunResult, CommandRunResult, CommandRunStatus
 from sandbox.utils.common import set_permissions_recursively
-from sandbox.utils.execution import cleanup_process, ensure_bash_integrity, get_output_non_blocking, kill_process_tree
+from sandbox.utils.execution import cleanup_process, ensure_bash_integrity, get_output_non_blocking, kill_process_tree, try_decode
 
 logger = structlog.stdlib.get_logger()
 config = RunConfig.get_instance_sync()
@@ -66,30 +66,36 @@ async def run_command_bare(command: str | List[str],
                                                           **(extra_env or {})
                                                       },
                                                       preexec_fn=preexec_fn)
+        
         if stdin is not None:
-            try:
-                if p.stdin:
-                    p.stdin.write(stdin.encode())
-                    p.stdin.flush()
-                else:
-                    logger.warning("Attempted to write to stdin, but stdin is closed.")
-            except Exception as e:
-                logger.exception(f"Failed to write to stdin: {e}")
-        if p.stdin:
-            try:
-                p.stdin.close()
-            except Exception as e:
-                logger.warning(f"Failed to close stdin: {e}")
+            logger.debug(f"Passing stdin of length {len(stdin)} to communicate().")
+            stdin_bytes = stdin.encode()
+        else:
+            stdin_bytes = None
+
         start_time = time.time()
         try:
-            await asyncio.wait_for(p.wait(), timeout=timeout)
+            stdout_b, stderr_b = await asyncio.wait_for(
+                p.communicate(input=stdin_bytes),
+                timeout=timeout
+            )
             execution_time = time.time() - start_time
             logger.debug(f'stop running command {command}')
         except asyncio.TimeoutError:
+            # Timeout: terminate the process and read as much of the generated output as possible.
+            try:
+                # p.kill()
+                kill_process_tree(p.pid)
+            except ProcessLookupError:
+                pass
+            stdout_b, stderr_b = await p.communicate()
+
             return CommandRunResult(status=CommandRunStatus.TimeLimitExceeded,
                                     execution_time=time.time() - start_time,
-                                    stdout=await get_output_non_blocking(p.stdout),
-                                    stderr=await get_output_non_blocking(p.stderr))
+                                    # stdout=await get_output_non_blocking(p.stdout),
+                                    # stderr=await get_output_non_blocking(p.stderr))
+                                    stdout=try_decode(stdout_b),
+                                    stderr=try_decode(stderr_b))
         finally:
             if psutil.pid_exists(p.pid):
                 kill_process_tree(p.pid)
@@ -102,8 +108,10 @@ async def run_command_bare(command: str | List[str],
         return CommandRunResult(status=CommandRunStatus.Finished,
                                 execution_time=execution_time,
                                 return_code=p.returncode,
-                                stdout=await get_output_non_blocking(p.stdout),
-                                stderr=await get_output_non_blocking(p.stderr))
+                                # stdout=await get_output_non_blocking(p.stdout),
+                                # stderr=await get_output_non_blocking(p.stderr))
+                                stdout=try_decode(stdout_b),
+                                stderr=try_decode(stderr_b))
     except Exception as e:
         message = f'exception on running command {command}: {e} | {traceback.print_tb(e.__traceback__)}'
         logger.warning(message)
@@ -144,7 +152,7 @@ async def run_commands(compile_command: Optional[str], run_command: str, cwd: st
                                                  extra_env,
                                                  preexec_fn=preexec_fn)
         if compile_res is None or (compile_res.status == CommandRunStatus.Finished and compile_res.return_code == 0):
-            run_res = await run_command_bare(run_command,
+            run_res = await run_command_bare(run_command + " " + args.extra_args if args.extra_args else run_command,
                                              args.run_timeout,
                                              args.stdin,
                                              cwd,

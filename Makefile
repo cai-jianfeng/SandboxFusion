@@ -1,11 +1,12 @@
 HOST ?= 0.0.0.0
 PORT ?= 8080
+WORKERS ?= 4
 TEST_NP ?= 4
 run:
-	uvicorn sandbox.server.server:app --reload --host $(HOST) --port $(PORT)
+	uvicorn sandbox.server.server:app --reload --host $(HOST) --port $(PORT) --workers $(WORKERS)
 
 run-online:
-	uvicorn sandbox.server.server:app --host $(HOST) --port $(PORT)
+	uvicorn sandbox.server.server:app --host $(HOST) --port $(PORT) --workers $(WORKERS)
 
 build-server-image:
 	docker build . -f scripts/Dockerfile.server -t sandbox:server

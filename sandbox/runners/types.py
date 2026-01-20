@@ -39,6 +39,7 @@ class CodeRunArgs(BaseModel):
     run_timeout: float = 10
     memory_limit_MB: int = -1
     stdin: Optional[str] = None
+    extra_args: Optional[str] = None
     fetch_files: List[str] = []
 
 

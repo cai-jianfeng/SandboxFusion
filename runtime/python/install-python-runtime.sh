@@ -9,8 +9,9 @@ do
     fi
 done
 
-rm -f ~/.condarc
-conda create -n sandbox-runtime -y python=3.10
+# rm -f ~/.condarc
+# The version of python must be geq 3.11
+conda create -n sandbox-runtime -y python=3.12
 
 source activate sandbox-runtime
 
